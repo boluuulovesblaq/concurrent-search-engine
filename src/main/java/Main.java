@@ -1,34 +1,43 @@
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.Map;
 
 public class Main {
     public static void main(String[] args) {
-        String apiKey = System.getenv("TAVILY_API_KEY");
+        String tavilyKey = System.getenv("TAVILY_API_KEY");
+        String anthropicKey = System.getenv("ANTHROPIC_API_KEY");
 
-        if (apiKey == null) {
-            System.err.println("TAVILY_API_KEY environment variable not set.");
+        if (tavilyKey == null || anthropicKey == null) {
+            System.out.println("Missing TAVILY_API_KEY or ANTHROPIC_API_KEY!");
             return;
         }
 
-        SerpFetcher serpFetcher = new SerpFetcher(apiKey);
-        List<String> urls = serpFetcher.getResultUrls("deep learning models journal papers", 5);
+        AnalysisTask crimeTask = new AnalysisTask(
+                "Crime Reporting Features",
+                "crime reporting systems papers",
+                5,
+                SemanticExtractor.Mode.CRIME_FEATURES,
+                tavilyKey,
+                anthropicKey
+        );
 
-        System.out.println("Got " + urls.size() + " URLs:");
-        for (String url : urls) {
-            System.out.println(" - " + url);
-        }
+        AnalysisTask headingsTask = new AnalysisTask(
+                "DL Paper Sub-Headings",
+                "deep learning model journal papers",
+                5,
+                SemanticExtractor.Mode.DL_HEADINGS,
+                tavilyKey,
+                anthropicKey
+        );
 
-        ExecutorService pool = Executors.newFixedThreadPool(urls.size());
-        PaperFetcher fetcher = new PaperFetcher(pool);
+        AnalysisRunner runner = new AnalysisRunner();
 
         long startTime = System.currentTimeMillis();
-        List<String> results = fetcher.fetchAll(urls);
+        Map<String, Map<String, Integer>> results = runner.runAll(List.of(crimeTask, headingsTask));
         long endTime = System.currentTimeMillis();
 
-        System.out.println("Total time: " + (endTime - startTime) + " ms");
-        System.out.println("Fetched " + results.size() + " pages.");
+        System.out.println();
+        System.out.println("Both analyses done in " + (endTime - startTime) + " ms");
 
-        pool.shutdown();
+        ChartRenderer.renderAll(results, "charts");
     }
 }

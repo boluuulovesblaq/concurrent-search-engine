@@ -11,34 +11,39 @@ import org.jsoup.nodes.Document;
 
 public class PaperFetcher {
 
-    private final HttpClient client = HttpClient.newBuilder()
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();    private final ExecutorService pool;
+    private final HttpClient client = HttpClient.newHttpClient();
+    private final ExecutorService pool;
 
     public PaperFetcher(ExecutorService pool) {
         this.pool = pool;
     }
 
-    // Fetches and cleans all given URLs CONCURRENTLY.
-    public List<String> fetchAll(List<String> urls) {
-        List<CompletableFuture<String>> futures = new ArrayList<>();
+    public List<PageResult> fetchAll(List<String> urls) {
+        List<CompletableFuture<PageResult>> futures = new ArrayList<>();
 
         for (String url : urls) {
-            CompletableFuture<String> future = CompletableFuture.supplyAsync(() -> {
+            CompletableFuture<PageResult> future = CompletableFuture.supplyAsync(() -> {
+                long start = System.currentTimeMillis();
                 String cleanText = fetchAndClean(url);
-                System.out.println("Fetched: " + url + " (" + cleanText.length() + " characters) "
-                        + "[thread: " + Thread.currentThread().getName() + "]");
-                return cleanText;
+                long elapsed = System.currentTimeMillis() - start;
+
+                boolean success = !cleanText.startsWith("FAILED:");
+                PageResult result = new PageResult(url, cleanText, success, elapsed);
+
+                String status = result.hasUsefulContent() ? "OK" : "THIN/EMPTY";
+                System.out.println("[" + status + "] " + url + " (" + cleanText.length() + " chars, "
+                        + elapsed + " ms) [thread: " + Thread.currentThread().getName() + "]");
+
+                return result;
             }, pool);
 
             futures.add(future);
         }
 
-        // Wait here until ALL futures are done
         CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
-        List<String> results = new ArrayList<>();
-        for (CompletableFuture<String> f : futures) {
+        List<PageResult> results = new ArrayList<>();
+        for (CompletableFuture<PageResult> f : futures) {
             results.add(f.join());
         }
         return results;
@@ -51,11 +56,6 @@ public class PaperFetcher {
                     .build();
 
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-
-            // TEMPORARY DIAGNOSTIC
-            System.out.println("DEBUG " + url + " -> status " + response.statusCode()
-                    + ", content-type: " + response.headers().firstValue("content-type").orElse("unknown")
-                    + ", raw length: " + response.body().length());
 
             Document doc = Jsoup.parse(response.body());
             doc.select("script, style, nav, footer, header").remove();

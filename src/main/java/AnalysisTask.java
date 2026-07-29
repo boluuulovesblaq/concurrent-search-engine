@@ -5,15 +5,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * One full analysis pipeline: search -> fetch papers -> extract items
- * (features or headings) -> aggregate counts. Generic over SemanticExtractor.Mode
- * so the same class runs both required analyses (crime features, DL headings).
- *
- * Concurrency: fetching is already parallel (PaperFetcher). Extraction is ALSO
- * run one-thread-per-paper here, with every thread writing into the same
- * ResultAggregator concurrently -- that's the shared-state concurrency point.
- */
 public class AnalysisTask implements Callable<Map<String, Integer>> {
 
     private final String name;
@@ -41,6 +32,7 @@ public class AnalysisTask implements Callable<Map<String, Integer>> {
     @Override
     public Map<String, Integer> call() {
         System.out.println("[" + name + "] searching: \"" + searchQuery + "\"");
+
         SerpFetcher serpFetcher = new SerpFetcher(tavilyApiKey);
         List<String> urls = serpFetcher.getResultUrls(searchQuery, maxResults);
         System.out.println("[" + name + "] got " + urls.size() + " URLs");
@@ -49,37 +41,35 @@ public class AnalysisTask implements Callable<Map<String, Integer>> {
             return Map.of();
         }
 
-        // Fetch stage: concurrent, one thread per URL (existing PaperFetcher behavior).
         ExecutorService fetchPool = Executors.newFixedThreadPool(urls.size());
-        List<String> texts;
+        List<PageResult> pageResults;
         try {
-            texts = new PaperFetcher(fetchPool).fetchAll(urls);
+            pageResults = new PaperFetcher(fetchPool).fetchAll(urls);
         } finally {
             fetchPool.shutdown();
         }
 
-        // Drop anything that failed to fetch or is too thin to be useful.
-        List<String> usableTexts = texts.stream()
-                .filter(t -> t != null && !t.startsWith("FAILED:") && t.length() >= 100)
+        List<PageResult> usablePages = pageResults.stream()
+                .filter(PageResult::hasUsefulContent)
                 .toList();
-        System.out.println("[" + name + "] " + usableTexts.size() + "/" + texts.size()
+        System.out.println("[" + name + "] " + usablePages.size() + "/" + pageResults.size()
                 + " pages usable after fetch");
 
-        // Extraction stage: concurrent, one thread per paper. Every thread calls
-        // aggregator.addAll(...) on the SAME aggregator -- this is the genuine
-        // shared-state race the ResultAggregator's ConcurrentHashMap/AtomicInteger protects.
+        if (usablePages.isEmpty()) {
+            return Map.of();
+        }
+
         ResultAggregator aggregator = new ResultAggregator();
-        SemanticExtractor extractor = new SemanticExtractor(anthropicApiKey);
-        ExecutorService extractPool = Executors.newFixedThreadPool(Math.min(usableTexts.size(), 8));
+        SemanticExtractor extractor = new SemanticExtractor(anthropicApiKey, true); // mock mode - no real API calls
+        ExecutorService extractPool = Executors.newFixedThreadPool(Math.min(usablePages.size(), 8));
 
         try {
-            List<CompletableFuture<Void>> futures = usableTexts.stream()
-                    .map(text -> CompletableFuture.runAsync(() -> {
-                        List<String> items = extractor.extract(text, mode);
+            List<CompletableFuture<Void>> futures = usablePages.stream()
+                    .map(page -> CompletableFuture.runAsync(() -> {
+                        List<String> items = extractor.extract(page.text(), mode);
                         aggregator.addAll(items);
                     }, extractPool))
                     .toList();
-
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         } finally {
             extractPool.shutdown();

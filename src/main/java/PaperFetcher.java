@@ -2,10 +2,14 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.text.PDFTextStripper;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
@@ -18,9 +22,16 @@ import org.jsoup.select.Elements;
  *     (for sub-heading counting)
  *
  * Filters out pages that would poison downstream results:
- *   - PDFs (Jsoup can't parse PDF binary; garbage in, garbage out)
  *   - blocked/paywall/error pages (their boilerplate isn't real content)
  *   - thin pages (too little content to be a real usable source)
+ *
+ * PDFs are no longer rejected outright: real text is extracted from them
+ * with Apache PDFBox instead of skipping them (they used to come back as
+ * near-empty bodies since Jsoup can't parse binary PDF bytes as HTML).
+ * PDFs have no headings extracted - PDFBox gives us a flat text stream,
+ * not a tagged document structure, so heading detection isn't reliable
+ * for this format. A PDF can still contribute to CRIME_FEATURES text
+ * scoring; it just won't contribute DL_HEADINGS sub-headings.
  */
 public class PaperFetcher {
 
@@ -99,48 +110,85 @@ public class PaperFetcher {
                     .header("User-Agent", "Mozilla/5.0 (compatible; StudentResearchBot/1.0)")
                     .build();
 
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<byte[]> response = client.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            byte[] bodyBytes = response.body();
 
-            // Reject PDFs and other non-HTML content outright - Jsoup parsing
-            // binary PDF bytes produces garbage (PDF structure keywords like
-            // "stream"/"endobj"), not real text.
             String contentType = response.headers().firstValue("content-type").orElse("").toLowerCase();
+            boolean looksLikePdf = contentType.contains("application/pdf")
+                    || url.toLowerCase().endsWith(".pdf");
+
+            if (looksLikePdf) {
+                return extractFromPdf(url, bodyBytes);
+            }
+
+            // Reject other non-HTML content (images, zips, etc.) - only
+            // PDFs get a dedicated extraction path; everything else that
+            // isn't text/html is still garbage-in-garbage-out for Jsoup.
             if (!contentType.contains("text/html") && !contentType.isEmpty()) {
                 return failed(url, "unsupported content-type: " + contentType);
             }
 
-            Document doc = Jsoup.parse(response.body());
-
-            Elements headingElements = doc.select("h1, h2, h3, h4");
-            List<String> headings = new ArrayList<>();
-            for (Element h : headingElements) {
-                String text = normalizeHeading(h.text());
-                if (!text.isEmpty() && text.length() < MAX_HEADING_LENGTH && !isJunkHeading(text)) {
-                    headings.add(text);
-                }
-            }
-
-            doc.select("script, style, nav, footer, header").remove();
-            String cleanText = doc.body().text();
-
-            // Reject blocked/error/paywall pages - their boilerplate text
-            // and headings aren't real article content.
-            String lowerText = cleanText.toLowerCase();
-            for (String indicator : BLOCK_INDICATORS) {
-                if (lowerText.contains(indicator)) {
-                    return failed(url, "blocked/error page detected");
-                }
-            }
-
-            if (cleanText.length() < MIN_USABLE_LENGTH) {
-                return failed(url, "content too thin");
-            }
-
-            return new PageResult(url, cleanText, headings, true, 0L);
+            String html = new String(bodyBytes, StandardCharsets.UTF_8);
+            return extractFromHtml(url, html);
 
         } catch (Exception e) {
             return failed(url, e.getMessage());
         }
+    }
+
+    private PageResult extractFromHtml(String url, String html) {
+        Document doc = Jsoup.parse(html);
+
+        Elements headingElements = doc.select("h1, h2, h3, h4");
+        List<String> headings = new ArrayList<>();
+        for (Element h : headingElements) {
+            String text = normalizeHeading(h.text());
+            if (!text.isEmpty() && text.length() < MAX_HEADING_LENGTH && !isJunkHeading(text)) {
+                headings.add(text);
+            }
+        }
+
+        doc.select("script, style, nav, footer, header").remove();
+        String cleanText = doc.body().text();
+
+        return validateAndBuild(url, cleanText, headings);
+    }
+
+    private PageResult extractFromPdf(String url, byte[] pdfBytes) {
+        try (PDDocument document = Loader.loadPDF(pdfBytes)) {
+            PDFTextStripper stripper = new PDFTextStripper();
+            String rawText = stripper.getText(document);
+
+            // Collapse the excessive whitespace/line-break noise PDF text
+            // extraction typically produces (columns, page breaks, etc.)
+            // into normal prose so it scores fairly against HTML text.
+            String cleanText = rawText.replaceAll("\\s+", " ").trim();
+
+            // No headings from PDFs - see class javadoc. Empty list means
+            // a PDF can still feed CRIME_FEATURES text scoring but won't
+            // contribute to DL_HEADINGS sub-heading counts.
+            return validateAndBuild(url, cleanText, List.of());
+
+        } catch (Exception e) {
+            return failed(url, "PDF extraction failed: " + e.getMessage());
+        }
+    }
+
+    private PageResult validateAndBuild(String url, String cleanText, List<String> headings) {
+        // Reject blocked/error/paywall pages - their boilerplate text
+        // and headings aren't real article content.
+        String lowerText = cleanText.toLowerCase();
+        for (String indicator : BLOCK_INDICATORS) {
+            if (lowerText.contains(indicator)) {
+                return failed(url, "blocked/error page detected");
+            }
+        }
+
+        if (cleanText.length() < MIN_USABLE_LENGTH) {
+            return failed(url, "content too thin");
+        }
+
+        return new PageResult(url, cleanText, headings, true, 0L);
     }
 
     private PageResult failed(String url, String reason) {

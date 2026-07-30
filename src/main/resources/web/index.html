@@ -240,6 +240,27 @@
     }
     details.sources .src-list a { color: var(--run); text-decoration: none; }
     details.sources .src-list a:hover { text-decoration: underline; }
+
+    /* Responsive improvements */
+    @media (max-width:900px){
+      body{padding:16px 10px;}
+      .titlebar{flex-wrap:wrap;gap:8px}
+      .cmd-row{flex-direction:column;align-items:stretch}
+      .prompt{display:none}
+      .cmd-row .field,.cmd-row button{width:100%!important;max-width:none!important}
+      #runBtn{width:100%}
+      .console{height:220px}
+    }
+    @media (max-width:600px){
+      .shell{border-radius:0}
+      .titlebar{padding:12px}
+      .name{font-size:12px}
+      .cmdbar,.panel,.console{padding:12px}
+      .results{grid-template-columns:1fr!important}
+      .bar-label{font-size:10px}
+      .field input,.field textarea{font-size:16px}
+    }
+
   </style>
 </head>
 <body>

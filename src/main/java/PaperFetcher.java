@@ -14,21 +14,34 @@ import org.jsoup.select.Elements;
 /**
  * Fetches URLs concurrently. For each page, extracts BOTH:
  *   - cleaned body text (for TF-IDF feature extraction)
- *   - the list of heading tag contents, h1-h4, in document order (for
- *     sub-heading counting)
- * Both come from the same parsed Document, so we do it once per page
- * rather than fetching twice per task type.
+ *   - the list of heading tag contents, h1-h4, normalized and de-numbered
+ *     (for sub-heading counting)
+ *
+ * Filters out pages that would poison downstream results:
+ *   - PDFs (Jsoup can't parse PDF binary; garbage in, garbage out)
+ *   - blocked/paywall/error pages (their boilerplate isn't real content)
+ *   - thin pages (too little content to be a real usable source)
  */
 public class PaperFetcher {
 
-    // followRedirects(NORMAL) matters: some journal/paper sites (e.g. PMC,
-    // JMLR) respond with 301/302 redirects rather than the page directly.
-    // Without this, those pages come back empty even though status looks fine.
     private final HttpClient client = HttpClient.newBuilder()
             .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
     private final ExecutorService pool;
+
+    private static final int MIN_USABLE_LENGTH = 200;
+    private static final int MAX_HEADING_LENGTH = 60;
+
+    // Boilerplate phrases indicating we got a blocked/error/paywall page
+    // instead of real article content - these must not become "features"
+    // or "headings" in the aggregated results.
+    private static final List<String> BLOCK_INDICATORS = List.of(
+            "access denied", "access blocked", "debug information",
+            "there was a problem providing the content",
+            "please verify you are a human", "enable javascript",
+            "403 forbidden", "page not found", "captcha"
+    );
 
     public PaperFetcher(ExecutorService pool) {
         this.pool = pool;
@@ -43,11 +56,10 @@ public class PaperFetcher {
                 PageResult result = fetchAndExtract(url);
                 long elapsed = System.currentTimeMillis() - start;
 
-                // rebuild with actual elapsed time now that fetch is done
                 result = new PageResult(result.url(), result.text(), result.headings(),
                         result.success(), elapsed);
 
-                String status = result.hasUsefulContent() ? "OK" : "THIN/EMPTY";
+                String status = result.hasUsefulContent() ? "OK" : "SKIPPED";
                 System.out.println("[" + status + "] " + url + " (" + result.text().length()
                         + " chars, " + result.headings().size() + " headings, " + elapsed
                         + " ms) [thread: " + Thread.currentThread().getName() + "]");
@@ -74,29 +86,58 @@ public class PaperFetcher {
                     .build();
 
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+
+            // Reject PDFs and other non-HTML content outright - Jsoup parsing
+            // binary PDF bytes produces garbage (PDF structure keywords like
+            // "stream"/"endobj"), not real text.
+            String contentType = response.headers().firstValue("content-type").orElse("").toLowerCase();
+            if (!contentType.contains("text/html") && !contentType.isEmpty()) {
+                return failed(url, "unsupported content-type: " + contentType);
+            }
+
             Document doc = Jsoup.parse(response.body());
 
-            // Extract headings BEFORE stripping/cleaning, straight from the
-            // structural tags - this is direct HTML parsing, not statistical
-            // keyword extraction, since a heading is a structural element,
-            // not just a frequent phrase in the body.
             Elements headingElements = doc.select("h1, h2, h3, h4");
             List<String> headings = new ArrayList<>();
             for (Element h : headingElements) {
-                String text = h.text().trim();
-                if (!text.isEmpty()) {
+                String text = normalizeHeading(h.text());
+                if (!text.isEmpty() && text.length() < MAX_HEADING_LENGTH) {
                     headings.add(text);
                 }
             }
 
-            // Now clean the document for body text (used by TF-IDF)
             doc.select("script, style, nav, footer, header").remove();
             String cleanText = doc.body().text();
+
+            // Reject blocked/error/paywall pages - their boilerplate text
+            // and headings aren't real article content.
+            String lowerText = cleanText.toLowerCase();
+            for (String indicator : BLOCK_INDICATORS) {
+                if (lowerText.contains(indicator)) {
+                    return failed(url, "blocked/error page detected");
+                }
+            }
+
+            if (cleanText.length() < MIN_USABLE_LENGTH) {
+                return failed(url, "content too thin");
+            }
 
             return new PageResult(url, cleanText, headings, true, 0L);
 
         } catch (Exception e) {
-            return new PageResult(url, "FAILED: " + e.getMessage(), List.of(), false, 0L);
+            return failed(url, e.getMessage());
         }
+    }
+
+    private PageResult failed(String url, String reason) {
+        return new PageResult(url, "FAILED: " + reason, List.of(), false, 0L);
+    }
+
+    private String normalizeHeading(String raw) {
+        if (raw == null) return "";
+        return raw.trim().toLowerCase()
+                .replaceAll("^(section\\s*)?[0-9ivxIVX]+[.):]?\\s*", "")
+                .replaceAll("[.:]+$", "")
+                .trim();
     }
 }

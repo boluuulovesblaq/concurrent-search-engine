@@ -1,28 +1,27 @@
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class AnalysisTask implements Callable<Map<String, Integer>> {
 
+    public enum Mode { CRIME_FEATURES, DL_HEADINGS }
+
     private final String name;
     private final String searchQuery;
     private final int maxResults;
-    private final SemanticExtractor.Mode mode;
+    private final Mode mode;
     private final String tavilyApiKey;
-    private final String anthropicApiKey;
 
     public AnalysisTask(String name, String searchQuery, int maxResults,
-                        SemanticExtractor.Mode mode,
-                        String tavilyApiKey, String anthropicApiKey) {
+                        Mode mode, String tavilyApiKey) {
         this.name = name;
         this.searchQuery = searchQuery;
         this.maxResults = maxResults;
         this.mode = mode;
         this.tavilyApiKey = tavilyApiKey;
-        this.anthropicApiKey = anthropicApiKey;
     }
 
     public String getName() {
@@ -60,19 +59,23 @@ public class AnalysisTask implements Callable<Map<String, Integer>> {
         }
 
         ResultAggregator aggregator = new ResultAggregator();
-        SemanticExtractor extractor = new SemanticExtractor(anthropicApiKey, true); // mock mode - no real API calls
-        ExecutorService extractPool = Executors.newFixedThreadPool(Math.min(usablePages.size(), 8));
 
-        try {
-            List<CompletableFuture<Void>> futures = usablePages.stream()
-                    .map(page -> CompletableFuture.runAsync(() -> {
-                        List<String> items = extractor.extract(page.text(), mode);
-                        aggregator.addAll(items);
-                    }, extractPool))
-                    .toList();
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
-        } finally {
-            extractPool.shutdown();
+        if (mode == Mode.DL_HEADINGS) {
+            // Headings were already extracted structurally in PaperFetcher -
+            // just aggregate them directly, no algorithm needed here.
+            for (PageResult page : usablePages) {
+                aggregator.addAll(page.headings());
+            }
+        } else {
+            // CRIME_FEATURES: TF-IDF needs ALL documents together (for IDF),
+            // so this is one batch call, not a per-page loop.
+            List<String> bodies = usablePages.stream().map(PageResult::text).toList();
+            TfIdfExtractor extractor = new TfIdfExtractor();
+            List<List<String>> topTermsPerDoc = extractor.extractTopTermsPerDocument(bodies);
+
+            for (List<String> terms : topTermsPerDoc) {
+                aggregator.addAll(terms);
+            }
         }
 
         Map<String, Integer> counts = aggregator.getCounts();

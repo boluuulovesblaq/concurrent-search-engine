@@ -1,6 +1,8 @@
-public record PageResult(String url, String text, boolean success, long fetchTimeMs) {
+import java.util.List;
 
-    // Convenience check: did we get enough real content to be worth using?
+public record PageResult(String url, String text, List<String> headings,
+                         boolean success, long fetchTimeMs) {
+
     public boolean hasUsefulContent() {
         return success && text != null && text.length() >= 100;
     }

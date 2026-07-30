@@ -4,10 +4,9 @@ import java.util.Map;
 public class Main {
     public static void main(String[] args) {
         String tavilyKey = System.getenv("TAVILY_API_KEY");
-        String anthropicKey = System.getenv("ANTHROPIC_API_KEY");
 
-        if (tavilyKey == null || anthropicKey == null) {
-            System.out.println("Missing TAVILY_API_KEY or ANTHROPIC_API_KEY!");
+        if (tavilyKey == null) {
+            System.out.println("Missing TAVILY_API_KEY!");
             return;
         }
 
@@ -15,18 +14,16 @@ public class Main {
                 "Crime Reporting Features",
                 "crime reporting systems papers",
                 5,
-                SemanticExtractor.Mode.CRIME_FEATURES,
-                tavilyKey,
-                anthropicKey
+                AnalysisTask.Mode.CRIME_FEATURES,
+                tavilyKey
         );
 
         AnalysisTask headingsTask = new AnalysisTask(
                 "DL Paper Sub-Headings",
                 "deep learning model journal papers",
                 5,
-                SemanticExtractor.Mode.DL_HEADINGS,
-                tavilyKey,
-                anthropicKey
+                AnalysisTask.Mode.DL_HEADINGS,
+                tavilyKey
         );
 
         AnalysisRunner runner = new AnalysisRunner();

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>concurrent-search-engine</title>
+  <style>
+    :root {
+      --bg-void:    #0A0E12;
+      --bg-panel:   #10161C;
+      --bg-raised:  #151C23;
+      --line:       #1E2932;
+      --ink:        #DCE4EA;
+      --ink-dim:    #64707C;
+      --ok:         #3ED598;
+      --skip:       #E2A23D;
+      --run:        #5AA9E6;
+      --err:        #E2543D;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html { color-scheme: dark; }
+    body {
+      margin: 0;
+      background: var(--bg-void);
+      color: var(--ink);
+      font-family: var(--sans);
+      padding: 32px 20px 60px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .shell {
+      width: 100%;
+      max-width: 1080px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      overflow: hidden;
+      background: var(--bg-panel);
+    }
+
+    .titlebar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 18px;
+      border-bottom: 1px solid var(--line);
+      background: var(--bg-raised);
+    }
+    .titlebar .name {
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--ink-dim);
+      letter-spacing: 0.02em;
+    }
+    .titlebar .name b { color: var(--ink); font-weight: 600; }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .status .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--ink-dim);
+      transition: background .2s ease;
+    }
+    .status.idle .dot { background: var(--ink-dim); }
+    .status.running .dot { background: var(--run); animation: pulse 1s ease-in-out infinite; }
+    .status.done .dot { background: var(--ok); }
+    .status.error .dot { background: var(--err); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+    @media (prefers-reduced-motion: reduce) { .status.running .dot { animation: none; } }
+
+    .cmdbar {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 18px;
+      border-bottom: 1px solid var(--line);
+    }
+    .cmd-row { display: flex; align-items: flex-end; gap: 10px; }
+    .cmd-row .field { flex: 1; }
+    .prompt { font-family: var(--mono); color: var(--run); font-size: 15px; padding-bottom: 6px; }
+    .field { display: flex; flex-direction: column; gap: 4px; }
+    .field label {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--ink-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .field input {
+      background: var(--bg-void);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 8px 10px;
+      width: 100%;
+    }
+    .field textarea {
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid var(--line);
+      border-radius: 0;
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 13px;
+      padding: 6px 0;
+      width: 100%;
+      resize: none;
+      overflow-y: auto;
+      min-height: 30px;
+      max-height: 200px;
+      line-height: 1.4;
+    }
+    .field textarea:focus-visible {
+      border-bottom-color: var(--run);
+    }
+    .field input:focus-visible {
+      outline: 2px solid var(--run);
+      outline-offset: 1px;
+    }
+    #runBtn {
+      font-family: var(--mono);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: var(--ok);
+      color: #04140D;
+      border: none;
+      border-radius: 5px;
+      padding: 10px 16px;
+      cursor: pointer;
+    }
+    #runBtn:hover:not(:disabled) { filter: brightness(1.08); }
+    #runBtn:disabled { background: var(--line); color: var(--ink-dim); cursor: default; }
+    #runBtn:focus-visible { outline: 2px solid var(--run); outline-offset: 2px; }
+
+    .console {
+      background: #070A0D;
+      border-bottom: 1px solid var(--line);
+      padding: 14px 18px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.7;
+      height: 300px;
+      overflow-y: auto;
+    }
+    .console .line { white-space: pre-wrap; word-break: break-word; }
+    .console .line.cmd  { color: var(--ink); }
+    .console .line.info { color: var(--ink-dim); }
+    .console .line.ok   { color: var(--ok); }
+    .console .line.skip { color: var(--skip); }
+    .console .line.err  { color: var(--err); }
+
+    .results {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      background: var(--line);
+    }
+    @media (max-width: 720px) { .results { grid-template-columns: 1fr; } }
+
+    .panel { background: var(--bg-panel); padding: 18px; min-height: 260px; }
+    .panel .ptitle {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink);
+      font-weight: 600;
+      margin-bottom: 2px;
+      word-break: break-word;
+    }
+    .panel .pmeta {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-dim);
+      margin-bottom: 14px;
+    }
+    .panel .empty {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--ink-dim);
+      padding: 40px 0;
+      text-align: center;
+    }
+
+    .bar-row { margin-bottom: 9px; }
+    .bar-row .bar-label {
+      display: flex;
+      justify-content: space-between;
+      font-family: var(--mono);
+      font-size: 11.5px;
+      color: var(--ink);
+      margin-bottom: 3px;
+    }
+    .bar-row .bar-label .rank { color: var(--ink-dim); margin-right: 6px; }
+    .bar-row .bar-label .count { color: var(--ink-dim); }
+    .bar-track {
+      background: var(--bg-void);
+      border-radius: 3px;
+      height: 6px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .bar-fill {
+      height: 100%;
+      background: var(--ok);
+      border-radius: 2px;
+    }
+
+    details.sources {
+      margin-top: 16px;
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+    details.sources summary {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--ink-dim);
+      cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    details.sources .src-list {
+      margin-top: 8px;
+      font-family: var(--mono);
+      font-size: 11px;
+      line-height: 1.8;
+      color: var(--ink-dim);
+    }
+    details.sources .src-list a { color: var(--run); text-decoration: none; }
+    details.sources .src-list a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+
+<div class="shell">
+
+  <div class="titlebar">
+    <div class="name"><b>concurrent-search-engine</b> — localhost:8080</div>
+    <div class="status idle" id="statusPill"><span class="dot"></span><span id="statusText">idle</span></div>
+  </div>
+
+  <div class="cmdbar">
+    <div class="cmd-row">
+      <span class="prompt">$</span>
+      <div class="field">
+        <label for="crimeQuery">task 1 — features</label>
+        <textarea id="crimeQuery" rows="1">crime reporting systems papers</textarea>
+      </div>
+    </div>
+    <div class="cmd-row">
+      <span class="prompt">$</span>
+      <div class="field">
+        <label for="headingsQuery">task 2 — sub-headings</label>
+        <textarea id="headingsQuery" rows="1">deep learning model journal papers</textarea>
+      </div>
+    </div>
+    <div class="cmd-row">
+      <span class="prompt" style="visibility:hidden">$</span>
+      <div class="field" style="max-width:140px">
+        <label for="maxResults">n results</label>
+        <input type="number" id="maxResults" value="12" min="3" max="30">
+      </div>
+      <button id="runBtn">Run</button>
+    </div>
+  </div>
+
+  <div class="console" id="console" aria-live="polite"></div>
+
+  <div class="results" id="results">
+    <div class="panel"><div class="empty">task 1 output will appear here</div></div>
+    <div class="panel"><div class="empty">task 2 output will appear here</div></div>
+  </div>
+
+</div>
+
+<script>
+  const runBtn = document.getElementById('runBtn');
+  const consoleEl = document.getElementById('console');
+  const resultsEl = document.getElementById('results');
+  const statusPill = document.getElementById('statusPill');
+  const statusText = document.getElementById('statusText');
+
+  function autoGrow(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+  }
+  ['crimeQuery', 'headingsQuery'].forEach(id => {
+    const el = document.getElementById(id);
+    autoGrow(el);
+    el.addEventListener('input', () => autoGrow(el));
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        runBtn.click();
+      }
+    });
+  });
+
+  function setStatus(state, label) {
+    statusPill.className = 'status ' + state;
+    statusText.textContent = label;
+  }
+
+  function writeLine(text, cls) {
+    const div = document.createElement('div');
+    div.className = 'line ' + (cls || 'info');
+    div.textContent = text;
+    consoleEl.appendChild(div);
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+  }
+
+  function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
+  function classifyLine(line) {
+    if (line.includes('[OK]')) return 'ok';
+    if (line.includes('[SKIPPED]')) return 'skip';
+    if (/error|failed/i.test(line)) return 'err';
+    return 'info';
+  }
+
+  function emptyPanel(text) {
+    const div = document.createElement('div');
+    div.className = 'panel';
+    div.innerHTML = `<div class="empty"></div>`;
+    div.querySelector('.empty').textContent = text;
+    return div;
+  }
+
+  function renderPanel(title, result) {
+    try {
+      const counts = (result && result.counts) || {};
+      const sourceUrls = (result && result.sourceUrls) || [];
+      const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+
+      if (entries.length === 0) {
+        return emptyPanel(`${title} — no usable results found`);
+      }
+
+      const top15 = entries.slice(0, 15);
+      const max = top15[0][1];
+
+      const panel = document.createElement('div');
+      panel.className = 'panel';
+
+      const ptitle = document.createElement('div');
+      ptitle.className = 'ptitle';
+      ptitle.textContent = title;
+      panel.appendChild(ptitle);
+
+      const pmeta = document.createElement('div');
+      pmeta.className = 'pmeta';
+      pmeta.textContent = `${entries.length} distinct items · ${sourceUrls.length} sources`;
+      panel.appendChild(pmeta);
+
+      top15.forEach(([term, count], i) => {
+        const row = document.createElement('div');
+        row.className = 'bar-row';
+        const pct = Math.max(4, Math.round((count / max) * 100));
+        row.innerHTML = `
+        <div class="bar-label">
+          <span><span class="rank">${String(i + 1).padStart(2, '0')}</span>${escapeHtml(term)}</span>
+          <span class="count">${count}</span>
+        </div>
+        <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+      `;
+        panel.appendChild(row);
+      });
+
+      if (sourceUrls.length > 0) {
+        const details = document.createElement('details');
+        details.className = 'sources';
+        const summary = document.createElement('summary');
+        summary.textContent = `sources (${sourceUrls.length})`;
+        details.appendChild(summary);
+        const list = document.createElement('div');
+        list.className = 'src-list';
+        list.innerHTML = sourceUrls.map(u =>
+                `<div><a href="${escapeAttr(u)}" target="_blank" rel="noopener">${escapeHtml(u)}</a></div>`
+        ).join('');
+        details.appendChild(list);
+        panel.appendChild(details);
+      }
+
+      return panel;
+    } catch (e) {
+      return emptyPanel(`${title} — could not render (${e.message})`);
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function escapeAttr(s) { return escapeHtml(s); }
+
+  runBtn.addEventListener('click', async () => {
+    const crimeQuery = document.getElementById('crimeQuery').value.trim();
+    const headingsQuery = document.getElementById('headingsQuery').value.trim();
+    const maxResults = parseInt(document.getElementById('maxResults').value, 10) || 12;
+
+    consoleEl.innerHTML = '';
+    if (!crimeQuery || !headingsQuery) {
+      writeLine('! both queries must be filled in', 'err');
+      return;
+    }
+
+    runBtn.disabled = true;
+    setStatus('running', 'running');
+    resultsEl.innerHTML = '';
+    resultsEl.appendChild(emptyPanel('working...'));
+    resultsEl.appendChild(emptyPanel('working...'));
+
+    writeLine(`$ run --task1="${crimeQuery}" --task2="${headingsQuery}" --n=${maxResults}`, 'cmd');
+    writeLine('> running (this can take a while depending on how many pages are fetched)...', 'info');
+
+    try {
+      const res = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ crimeQuery, headingsQuery, maxResults })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+      if (data.log) {
+        data.log.split('\n').filter(l => l.trim().length > 0).forEach(line => {
+          writeLine(line, classifyLine(line));
+        });
+      }
+
+      resultsEl.innerHTML = '';
+      for (const [title, result] of Object.entries(data)) {
+        if (title === 'log') continue;
+        resultsEl.appendChild(renderPanel(title, result));
+      }
+      writeLine('$ done', 'cmd');
+      setStatus('done', 'done');
+    } catch (err) {
+      writeLine('! error: ' + err.message, 'err');
+      setStatus('error', 'error');
+    } finally {
+      runBtn.disabled = false;
+    }
+  });
+</script>
+
+</body>
+</html>

@@ -38,7 +38,7 @@ public class TfIdfExtractor {
             "rights", "click", "here", "read", "more", "view", "full", "text", "pdf",
             "doi", "issn", "isbn", "volume", "issue", "page", "pages", "vol", "no",
             "home", "about", "contact", "search", "browse", "advanced", "help",
-            "feedback", "site", "map", "back", "top", "next", "previous", "page",
+            "feedback", "site", "map", "back", "top", "next", "previous",
             "loading", "javascript", "enable", "browser", "supported", "unsupported"
     );
 
@@ -95,16 +95,45 @@ public class TfIdfExtractor {
         return results;
     }
 
+    private static final int MAX_NGRAM_SIZE = 3;
+
     private Map<String, Integer> countTerms(String text) {
         Map<String, Integer> counts = new HashMap<>();
         if (text == null || text.isBlank()) return counts;
 
-        String[] words = WORD_SPLIT.split(text.toLowerCase());
-        for (String word : words) {
-            if (word.length() < MIN_WORD_LENGTH) continue;
-            if (STOPWORDS.contains(word)) continue;
-            counts.merge(word, 1, Integer::sum);
+        String[] rawWords = WORD_SPLIT.split(text.toLowerCase());
+
+        // Filter to valid words first, but keep track of runs of CONSECUTIVE
+        // valid words - stopwords/short words act as breaks so we never
+        // bridge an n-gram across a word we dropped (e.g. "gps ... tagging"
+        // with "the" removed in between should NOT become "gps tagging").
+        List<List<String>> runs = new ArrayList<>();
+        List<String> currentRun = new ArrayList<>();
+        for (String word : rawWords) {
+            boolean valid = word.length() >= MIN_WORD_LENGTH && !STOPWORDS.contains(word);
+            if (valid) {
+                currentRun.add(word);
+            } else if (!currentRun.isEmpty()) {
+                runs.add(currentRun);
+                currentRun = new ArrayList<>();
+            }
         }
+        if (!currentRun.isEmpty()) runs.add(currentRun);
+
+        // Within each run, emit unigrams, bigrams, and trigrams. Scoring all
+        // three sizes together lets genuinely distinctive single words
+        // (e.g. "nibrs") compete alongside multi-word phrases (e.g. "gps
+        // tagging"); TF-IDF's rarity weighting naturally favors whichever
+        // is the more distinctive signal.
+        for (List<String> run : runs) {
+            for (int n = 1; n <= MAX_NGRAM_SIZE; n++) {
+                for (int i = 0; i + n <= run.size(); i++) {
+                    String term = String.join(" ", run.subList(i, i + n));
+                    counts.merge(term, 1, Integer::sum);
+                }
+            }
+        }
+
         return counts;
     }
 }

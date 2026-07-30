@@ -82,12 +82,10 @@ public class SearchEngineGUI {
         String crimeQuery = crimeQueryField.getText().trim();
         String headingsQuery = headingsQueryField.getText().trim();
         int maxResults = (Integer) maxResultsSpinner.getValue();
-
         if (crimeQuery.isEmpty() || headingsQuery.isEmpty()) {
             logArea.setText("Both queries must be filled in.\n");
             return;
         }
-
         runButton.setEnabled(false);
         logArea.setText("Running both analyses concurrently...\n");
         chartsPanel.removeAll();
@@ -95,36 +93,29 @@ public class SearchEngineGUI {
         chartsPanel.add(placeholderLabel("Working..."));
         chartsPanel.revalidate();
         chartsPanel.repaint();
-
         new SwingWorker<Map<String, AnalysisResult>, String>() {
-
             @Override
             protected Map<String, AnalysisResult> doInBackground() {
                 AnalysisTask crimeTask = new AnalysisTask(
-                        "Crime Reporting Features", crimeQuery,
+                        crimeQuery, crimeQuery,
                         maxResults, AnalysisTask.Mode.CRIME_FEATURES, tavilyKey);
-
                 AnalysisTask headingsTask = new AnalysisTask(
-                        "DL Paper Sub-Headings", headingsQuery,
+                        headingsQuery, headingsQuery,
                         maxResults, AnalysisTask.Mode.DL_HEADINGS, tavilyKey);
-
                 publish("Searching and fetching sources for both tasks concurrently...");
                 AnalysisRunner runner = new AnalysisRunner();
                 return runner.runAll(List.of(crimeTask, headingsTask));
             }
-
             @Override
             protected void process(List<String> chunks) {
                 for (String line : chunks) {
                     logArea.append(line + "\n");
                 }
             }
-
             @Override
             protected void done() {
                 try {
                     Map<String, AnalysisResult> results = get();
-
                     chartsPanel.removeAll();
                     for (Map.Entry<String, AnalysisResult> entry : results.entrySet()) {
                         if (entry.getValue().counts().isEmpty()) {
@@ -136,9 +127,7 @@ public class SearchEngineGUI {
                     }
                     chartsPanel.revalidate();
                     chartsPanel.repaint();
-
                     logArea.append("Done. Displaying results.\n");
-
                 } catch (Exception ex) {
                     logArea.append("Error: " + ex.getMessage() + "\n");
                 } finally {

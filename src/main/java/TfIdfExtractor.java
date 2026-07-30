@@ -28,7 +28,18 @@ public class TfIdfExtractor {
             "we", "our", "it", "its", "as", "by", "from", "at", "not", "can", "will",
             "which", "such", "also", "may", "has", "have", "had", "but", "if", "then",
             "article", "research", "et", "al", "figure", "table", "abstract", "http",
-            "https", "www", "com", "org"
+            "https", "www", "com", "org",
+            // Site chrome / navigation / metadata noise observed leaking into results
+            "cancel", "accessed", "official", "your", "source", "cloud", "permalink",
+            "cited", "related", "recommenders", "similar", "articles", "share",
+            "download", "print", "email", "login", "log", "sign", "register",
+            "subscribe", "subscription", "menu", "navigation", "skip", "content",
+            "cookie", "cookies", "privacy", "policy", "terms", "copyright", "reserved",
+            "rights", "click", "here", "read", "more", "view", "full", "text", "pdf",
+            "doi", "issn", "isbn", "volume", "issue", "page", "pages", "vol", "no",
+            "home", "about", "contact", "search", "browse", "advanced", "help",
+            "feedback", "site", "map", "back", "top", "next", "previous", "page",
+            "loading", "javascript", "enable", "browser", "supported", "unsupported"
     );
 
     private static final int MIN_WORD_LENGTH = 4;

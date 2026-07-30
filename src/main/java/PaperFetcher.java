@@ -43,6 +43,20 @@ public class PaperFetcher {
             "403 forbidden", "page not found", "captcha"
     );
 
+    // Heading text matching any of these isn't a real section/sub-heading -
+    // it's site chrome, citation-tracker boilerplate, or nav copy that
+    // happens to sit inside an h1-h4 tag. Reject before it's counted.
+    private static final List<String> JUNK_HEADING_PHRASES = List.of(
+            "cited by", "cited by other articles", "related articles",
+            "similar articles", "recommenders", "recommended articles",
+            "permalink", "share this", "download citation", "export citation",
+            "sign in", "log in", "create account", "subscribe", "subscription",
+            "cookie", "privacy policy", "terms of use", "terms of service",
+            "table of contents", "back to top", "skip to content", "skip to main",
+            "search", "menu", "navigation", "advertisement", "sponsored",
+            "you may also like", "more from this", "further reading"
+    );
+
     public PaperFetcher(ExecutorService pool) {
         this.pool = pool;
     }
@@ -101,7 +115,7 @@ public class PaperFetcher {
             List<String> headings = new ArrayList<>();
             for (Element h : headingElements) {
                 String text = normalizeHeading(h.text());
-                if (!text.isEmpty() && text.length() < MAX_HEADING_LENGTH) {
+                if (!text.isEmpty() && text.length() < MAX_HEADING_LENGTH && !isJunkHeading(text)) {
                     headings.add(text);
                 }
             }
@@ -131,6 +145,15 @@ public class PaperFetcher {
 
     private PageResult failed(String url, String reason) {
         return new PageResult(url, "FAILED: " + reason, List.of(), false, 0L);
+    }
+
+    private boolean isJunkHeading(String normalizedText) {
+        for (String junk : JUNK_HEADING_PHRASES) {
+            if (normalizedText.contains(junk)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String normalizeHeading(String raw) {
